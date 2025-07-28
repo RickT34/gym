@@ -1,4 +1,5 @@
-from env import *
+from env import DEVICE
+import torch.nn as nn
 
 
 def build_mlp(input_dim:int, h_dims):

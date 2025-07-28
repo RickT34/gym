@@ -1,0 +1,6 @@
+gamma: 0.98
+ob_dim: 8
+layers: [64, 32, 16, 4]
+lr: 0.001
+epochs: 400
+batch_size: 32
