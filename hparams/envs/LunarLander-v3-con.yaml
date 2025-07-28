@@ -1,6 +1,6 @@
 id: LunarLander-v3
-continuous: False
+continuous: True
 gravity: -10.0
 enable_wind: False
 wind_power: 15.0
-max_episode_steps: 1000
+max_episode_steps: 500

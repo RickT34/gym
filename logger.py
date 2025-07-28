@@ -4,7 +4,7 @@ import datetime
 
 class Logger:
     def __init__(self, label:str):
-        log_dir = f'logs/{label}+{datetime.datetime.now().strftime("%Y%m%d_%H%M")}'
+        log_dir = f'logs/{label}'
         self._log_dir = log_dir
         print('logging outputs to ', log_dir)
         self._summ_writer = SummaryWriter(log_dir, flush_secs=1, max_queue=1)
