@@ -1,6 +1,6 @@
 gamma: 0.98
 ob_dim: 24
-layers: [64, 96, 32, 16, 4]
+layers: [96, 128, 64, 32, 4]
 lr: 0.001
 epochs: 500
 batch_size: 32
