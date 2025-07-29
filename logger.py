@@ -10,9 +10,12 @@ class Logger:
         self._summ_writer = SummaryWriter(log_dir, flush_secs=1, max_queue=1)
         self._step = 0
 
-    def log_scalar(self, name, val):
-        self._summ_writer.add_scalar('{}'.format(name), val, self._step)
-
+    def log_scalar(self, name:str, val):
+        self._summ_writer.add_scalar(name, val, self._step)
+    
+    def log_scalars(self, main_name:str, **vals):
+        self._summ_writer.add_scalars(main_name, vals, self._step)
+    
     def log_video(self, name, render_frames, fps=30):
         video_frames = np.stack(render_frames, axis=0).transpose(0, 3, 1, 2)
         video_frames = np.expand_dims(video_frames, axis=0)

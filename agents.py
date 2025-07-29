@@ -198,11 +198,16 @@ class PolicyGradientAgent(Agent):
         probs = torch.zeros(n, device=DEVICE)
         gammas = torch.ones(n, device=DEVICE)
         rew_tot = 0
+        rew_max = -float("inf")
+        rew_min = float("inf")
+        tot = n // 2
         def update_step(step, obs, act, r):
-            nonlocal losses, probs, gammas, rew_tot
+            nonlocal losses, probs, gammas, rew_tot, tot, rew_max, rew_min
             next_obs, rew, done, fail, info = r
+            rew_tot += rew.sum()
+            rew_max = max(rew_max, rew.max())
+            rew_min = min(rew_min, rew.min())
             rew = to_tensor(rew)
-            rew_tot += rew.sum().item()
             done = torch.from_numpy(done).to(DEVICE)
             fail = torch.from_numpy(fail).to(DEVICE)
             
@@ -214,15 +219,18 @@ class PolicyGradientAgent(Agent):
                 log_prob = torch.distributions.Normal(output, torch.exp(self.policy_logstd)).log_prob(act).sum(dim=-1)
             probs = log_prob + torch.where(rst, zeros, probs*self.gamma)
             losses -= probs*rew
+            tot += rst.sum().item()
             
         run_env_vec(env, self, {"sample": True}, max_steps, step_trigger=update_step)
-        tot = env.num_envs * max_steps
         loss = losses.sum() / tot
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
-        logger.log_scalar("reward_mean", rew_tot / tot)
-        logger.log_scalar("loss_mean", loss.item())
+        logger.log_scalar("score_mean", loss.item())
+        logger.log_scalar("eps_len", n*max_steps / tot)
+        logger.log_scalar("reward_mean", rew_tot / (n*max_steps))
+        logger.log_scalar("reward_max", rew_max)
+        logger.log_scalar("reward_min", rew_min)
         
 
     def training_loop(
