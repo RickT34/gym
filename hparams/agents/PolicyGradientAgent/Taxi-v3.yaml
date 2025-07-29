@@ -1,7 +1,17 @@
-gamma: 0.98
-ob_dim: 500
-layers: [1024, 1024, 512, 256, 64, 16, 6]
+gamma: 0.99
 lr: 0.001
 epochs: 1000
 discrete: True
 max_steps: 500
+act_dim: 6
+policy:
+  -
+    type: embedding
+    args:
+      input_dim: 500
+      h_dim: 64
+  - 
+    type: mlp
+    args:
+      input_dim: 64
+      h_dims: [128, 128, 64, 16, 6]

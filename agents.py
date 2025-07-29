@@ -13,11 +13,15 @@ def run_env(env:gym.Env, agent:"Agent", agent_args:dict, step_trigger:Callable|N
         obs, info = env.reset()
         step = 0
         while True:
-            obs = to_tensor(obs)
-            act = agent.get_action(obs, **agent_args)
-            r = env.step(to_numpy(act))
+            obs_t = torch.tensor(obs, device=DEVICE)
+            act = agent.get_action(obs_t, **agent_args)
+            if len(act.shape) == 0:
+                act_e = act.item()
+            else:
+                act_e = to_numpy(act)
+            r = env.step(act_e)
             if step_trigger is not None:
-                step_trigger(step, obs, act, r)
+                step_trigger(step, obs_t, act, r)
             next_obs, rew, done, fail, info = r
             if done or fail:
                 break
@@ -139,22 +143,22 @@ class Agent:
 class PolicyGradientAgent(Agent):
     def __init__(
         self,
-        ob_dim: int,
-        layers: list[int],
+        act_dim: int,
         lr: float,
         gamma: float,
         discrete: bool,
+        policy: list[dict],
         model_path: str | None = None,
         **kwargs
     ):
-        policy = model.build_mlp(ob_dim, layers)
+        net = model.gen_policy(policy)
         if model_path is not None:
-            policy.load_state_dict(
+            net.load_state_dict(
                 torch.load(model_path, weights_only=True, map_location=DEVICE)
             )
-        super().__init__(policy, discrete)
+        super().__init__(net, discrete)
         if not discrete:
-            self.policy_logstd = torch.nn.Parameter(torch.zeros((layers[-1],), device=DEVICE), requires_grad=True)
+            self.policy_logstd = torch.nn.Parameter(torch.zeros((act_dim,), device=DEVICE), requires_grad=True)
             self.optimizer = torch.optim.Adam(itertools.chain(self.policy.parameters(), [self.policy_logstd]), lr=lr)
         else:
             self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr)
