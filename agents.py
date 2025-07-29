@@ -77,6 +77,22 @@ def generate_flames(envargs:dict, agent:"Agent", sample:bool=False):
     flames = env.render()
     return flames
 
+def trajectories_logging(trajectories: list[Trajectory], logger: Logger):
+    steps_tot = 0
+    reward_tot = 0.0
+    reward_max = -float("inf")
+    reward_min = float("inf")
+    for traj in trajectories:
+        steps_tot += len(traj)
+        rews = np.stack(traj.rewards)
+        reward_tot += rews.sum()
+        reward_max = max(reward_max, rews.max())
+        reward_min = min(reward_min, rews.min())
+    logger.log_scalar("reward_mean", reward_tot / len(trajectories))
+    logger.log_scalar("reward_max", reward_max)
+    logger.log_scalar("reward_min", reward_min)
+    logger.log_scalar("eps_len", steps_tot/len(trajectories))
+
 class Agent:
     def __init__(self, policy, discrete:bool):
         self.policy = policy
@@ -177,7 +193,9 @@ class PolicyGradientAgent(Agent):
         **kwargs
     ):
         for epoch in tqdm(range(epochs)):
-            losses = self.update(Trajectory.sample_from_agent(self, env, batch_size=batch_size))
+            trajs = Trajectory.sample_from_agent(self, env, batch_size=batch_size)
+            losses = self.update(trajs)
+            trajectories_logging(trajs, logger)
             logger.log_scalar("loss_mean", losses.mean().item())
             logger.log_scalar("loss_std", losses.std().item())
             epo_trigger(epoch)

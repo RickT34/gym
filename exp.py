@@ -6,6 +6,7 @@ from logger import Logger
 import argparse
 import gymnasium as gym
 import datetime
+import os
 
 def do_human_eval(env_config, ag:agents.Agent):
     env_config['render_mode'] = 'human'
@@ -18,19 +19,19 @@ def do_train(label:str, env_config, ag, agent_config):
 
     logger = Logger(label)
     en = gym.make(**env_config)
-
+    save_path = f'data/{label}'
     def epo_rec(epoch: int):
         if epoch % 10 == 9:
             flames = agents.generate_flames(env_config, ag)
             logger.log_video("video", flames)
         if epoch % 100 == 99:
-            pass
+            os.makedirs(save_path, exist_ok=True)
+            ag.save(save_path+f"/{epoch}.pth")
     print("Start training...")
     ag.training_loop(en, logger, epo_rec, **agent_config)
     print("Training finished.")
 
-    save_path = f'data/{label}.pth'
-    ag.save(save_path)
+    ag.save(save_path+f"/final.pth")
     print(f"Model saved to {save_path}")
 
 def main(env:str, agent:str, model_path:None|str=None, e:bool=False):
