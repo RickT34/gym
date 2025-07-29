@@ -1,0 +1,7 @@
+gamma: 0.98
+ob_dim: 500
+layers: [1024, 1024, 512, 256, 64, 16, 6]
+lr: 0.001
+epochs: 1000
+discrete: True
+max_steps: 500
