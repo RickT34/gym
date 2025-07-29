@@ -24,6 +24,16 @@ def run_env(env:gym.Env, agent:"Agent", agent_args:dict, step_trigger:Callable|N
             obs = next_obs
             step += 1
 
+def run_env_vec(env:gym.vector.VectorEnv, agent:"Agent", agent_args:dict, max_steps:int, step_trigger:Callable|None=None):
+    obs, info = env.reset()
+    for step in range(max_steps):
+        obs = to_tensor(obs)
+        act = agent.get_action(obs, **agent_args)
+        r = env.step(to_numpy(act))
+        if step_trigger is not None:
+            step_trigger(step, obs, act, r)
+        obs = r[0]
+
 class Trajectory:
     def __init__(self):
         self.observatons: list[torch.Tensor] = []
@@ -64,15 +74,17 @@ class Trajectory:
     def __iter__(self):
         return zip(self.observatons, self.actions, self.rewards)
 
-def generate_flames(envargs:dict, agent:"Agent", sample:bool=False):
-    env = gym.make(render_mode="rgb_array", **envargs)
-    env = gym.wrappers.RenderCollection(env)
-    def step_trigger(step, obs, act, r):
-        next_obs, rew, done, fail, info = r
+def debug_step_trigger(step, obs, act, r):
+    next_obs, rew, done, fail, info = r
+    if (fail | done).any():
         print(f"Step {step}:")
         print(f"  Observation: {obs}")
         print(f"  Action: {act}")
-        print(f"  Reward: {rew}")
+        print(f"  Return: {r}")
+
+def generate_flames(envargs:dict, agent:"Agent", sample:bool=False):
+    env = gym.make(render_mode="rgb_array", **envargs)
+    env = gym.wrappers.RenderCollection(env)
     run_env(env, agent, {"sample": sample})
     flames = env.render()
     return flames
@@ -115,14 +127,11 @@ class Agent:
                 action = output
         return action
 
-    def update(self, trajectories: list[Trajectory]):
-        raise NotImplementedError()
-
     def save(self, path: str):
         raise NotImplementedError()
 
     def training_loop(
-        self, env: gym.Env, logger: Logger, epo_trigger: Callable, **kwargs
+        self, env: gym.vector.VectorEnv, logger: Logger, epo_trigger: Callable, **kwargs
     ):
         raise NotImplementedError()
 
@@ -149,7 +158,7 @@ class PolicyGradientAgent(Agent):
             self.optimizer = torch.optim.Adam(itertools.chain(self.policy.parameters(), [self.policy_logstd]), lr=lr)
         else:
             self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr)
-        self.gamma = gamma
+        self.gamma = torch.tensor(gamma, device=DEVICE)
 
     def update(self, trajectories: list[Trajectory]):
         losses = []
@@ -182,21 +191,51 @@ class PolicyGradientAgent(Agent):
     def save(self, path: str):
         torch.save(self.policy.state_dict(), path)
 
+    def update_vec(self, env:gym.vector.VectorEnv, logger:Logger, max_steps:int):
+        n = env.num_envs
+        losses = torch.zeros(n, device=DEVICE)
+        zeros = torch.zeros(n, device=DEVICE)
+        probs = torch.zeros(n, device=DEVICE)
+        gammas = torch.ones(n, device=DEVICE)
+        rew_tot = 0
+        def update_step(step, obs, act, r):
+            nonlocal losses, probs, gammas, rew_tot
+            next_obs, rew, done, fail, info = r
+            rew = to_tensor(rew)
+            rew_tot += rew.sum().item()
+            done = torch.from_numpy(done).to(DEVICE)
+            fail = torch.from_numpy(fail).to(DEVICE)
+            
+            rst = done | fail
+            output = self.policy(obs)
+            if self.discrete:
+                log_prob = torch.distributions.Categorical(logits=output).log_prob(act)
+            else:
+                log_prob = torch.distributions.Normal(output, torch.exp(self.policy_logstd)).log_prob(act).sum(dim=-1)
+            probs = log_prob + torch.where(rst, zeros, probs*self.gamma)
+            losses -= probs*rew
+            
+        run_env_vec(env, self, {"sample": True}, max_steps, step_trigger=update_step)
+        tot = env.num_envs * max_steps
+        loss = losses.sum() / tot
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        logger.log_scalar("reward_mean", rew_tot / tot)
+        logger.log_scalar("loss_mean", loss.item())
+        
+
     def training_loop(
         self,
-        env: gym.Env,
+        env: gym.vector.VectorEnv,
         logger: Logger,
         epo_trigger: Callable,
         *,
         epochs: int,
-        batch_size: int,
+        max_steps: int,
         **kwargs
     ):
         for epoch in tqdm(range(epochs)):
-            trajs = Trajectory.sample_from_agent(self, env, batch_size=batch_size)
-            losses = self.update(trajs)
-            trajectories_logging(trajs, logger)
-            logger.log_scalar("loss_mean", losses.mean().item())
-            logger.log_scalar("loss_std", losses.std().item())
+            self.update_vec(env, logger, max_steps)
             epo_trigger(epoch)
             logger.commit()

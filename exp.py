@@ -17,16 +17,18 @@ def do_human_eval(env_config, ag:agents.Agent):
 
 def do_train(label:str, env_config, ag, agent_config):
 
+    en = gym.make_vec(**env_config, num_envs=64, vectorization_mode="async")
+    
     logger = Logger(label)
-    en = gym.make(**env_config)
     save_path = f'data/{label}'
     def epo_rec(epoch: int):
         if epoch % 10 == 9:
             flames = agents.generate_flames(env_config, ag)
-            logger.log_video("video", flames)
+            logger.log_video("video", flames, en.metadata['render_fps'])
         if epoch % 100 == 99:
             os.makedirs(save_path, exist_ok=True)
             ag.save(save_path+f"/{epoch}.pth")
+
     print("Start training...")
     ag.training_loop(en, logger, epo_rec, **agent_config)
     print("Training finished.")
@@ -56,9 +58,9 @@ def main(env:str, agent:str, model_path:None|str=None, e:bool=False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--env", type=str, required=True, help="Name of the environment"
+        "--env", type=str, help="Name of the environment", default="LunarLander-v3"
     )
-    parser.add_argument("--agent", type=str, required=True, help="Name of the agent", choices=AGENT_CHOICES)
+    parser.add_argument("--agent", type=str, help="Name of the agent", choices=AGENT_CHOICES, default="PolicyGradientAgent")
     parser.add_argument("--model_path", type=str, default=None)
     parser.add_argument("-e", action="store_true", help="Evaluate the agent", default=False)
 
