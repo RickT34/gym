@@ -1,0 +1,17 @@
+type: PolicyGradientAgent
+args:
+  gamma: 0.98
+  lr: 0.001
+  epochs: 400
+  max_steps: 1000
+policy:
+  net:
+    -
+      type: mlp
+      args:
+        input_dim: 8
+        h_dims: [64, 32, 16, 4]
+  sampler:
+    type: Categorical
+    args:
+      temperature: 1.0

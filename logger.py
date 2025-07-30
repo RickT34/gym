@@ -21,6 +21,9 @@ class Logger:
         video_frames = np.expand_dims(video_frames, axis=0)
         self._summ_writer.add_video('{}'.format(name), video_frames, self._step, fps=fps)
 
+    def log_text(self, name:str, text:str):
+        self._summ_writer.add_text(name, text, self._step)
+
     def commit(self):
         self._summ_writer.flush()
         self._step += 1
