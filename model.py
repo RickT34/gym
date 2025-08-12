@@ -17,7 +17,9 @@ def build_embedding(input_dim: int, h_dim: int):
     return nn.Embedding(input_dim, h_dim)
 
 
-def gen_policy(policy_args: list[dict]):
+def gen_net(policy_args: list[dict]|dict):
+    if isinstance(policy_args, dict):
+        policy_args = [policy_args]
     models = []
     for policy_arg in policy_args:
         model = eval(f"build_{policy_arg['type']}")(**policy_arg["args"])

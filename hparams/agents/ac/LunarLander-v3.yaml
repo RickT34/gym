@@ -1,8 +1,8 @@
-type: PolicyGradientAgent
+type: ActorCriticAgent
 args:
   gamma: 0.99
   lr: 0.001
-  epochs: 400
+  epochs: 200
   max_steps: 500
   arch:
     policy:
@@ -14,3 +14,8 @@ args:
       type: Categorical
       args:
         temperature: 1.0
+    value:
+      type: mlp
+      args:
+        input_dim: 8
+        h_dims: [64, 32, 16, 1]

@@ -143,9 +143,7 @@ class Agent:
         return action
 
     def save(self, path: str):
-        torch.save(
-            (self.policy_net.state_dict(), self.policy_sampler.state_dict()), path
-        )
+        raise NotImplementedError()
 
     def training_loop(
         self, env: gym.vector.VectorEnv, logger: Logger, epo_trigger: Callable, **kwargs
@@ -153,33 +151,21 @@ class Agent:
         raise NotImplementedError()
 
     @staticmethod
-    def from_config(config: dict, model_path: str | None = None) -> "Agent":
-        policy_net = model.gen_policy(config["policy"]["net"])
-        policy_sampler = model.gen_sampler(config["policy"]["sampler"])
-        if model_path is not None:
-            net_state_dict, sampler_state_dict = torch.load(
-                model_path, map_location=DEVICE, weights_only=True
-            )
-            policy_net.load_state_dict(net_state_dict)
-            policy_sampler.load_state_dict(sampler_state_dict)
-        agent = eval(config['type'])(
-            policy_net=policy_net, policy_sampler=policy_sampler, **config["args"]
-        )
+    def from_config(config: dict) -> "Agent":
+        agent = eval(config["type"])(**config["args"])
         assert isinstance(agent, Agent)
         return agent
+
+    def load(self, path: str):
+        raise NotImplementedError()
 
 
 class PolicyGradientAgent(Agent):
     def __init__(
-        self,
-        policy_net: torch.nn.Module,
-        policy_sampler: model.Sampler,
-        lr: float,
-        gamma: float,
-        epochs: int,
-        max_steps: int,
-        **kwargs,
+        self, lr: float, gamma: float, epochs: int, max_steps: int, arch: dict
     ):
+        policy_net = model.gen_net(arch["policy"])
+        policy_sampler = model.gen_sampler(arch["sampler"])
         super().__init__(policy_net, policy_sampler)
         self.optimizer = torch.optim.Adam(
             itertools.chain(policy_net.parameters(), policy_sampler.parameters()), lr=lr
@@ -188,7 +174,19 @@ class PolicyGradientAgent(Agent):
         self.epochs = epochs
         self.max_steps = max_steps
 
-    def update_vec(self, env: gym.vector.VectorEnv, logger: Logger, max_steps: int):
+    def save(self, path: str):
+        torch.save(
+            (self.policy_net.state_dict(), self.policy_sampler.state_dict()), path
+        )
+
+    def load(self, path: str):
+        net_state_dict, sampler_state_dict = torch.load(
+            path, map_location=DEVICE, weights_only=True
+        )
+        self.policy_net.load_state_dict(net_state_dict)
+        self.policy_sampler.load_state_dict(sampler_state_dict)
+
+    def update(self, env: gym.vector.VectorEnv, logger: Logger, max_steps: int):
         n = env.num_envs
         losses = torch.zeros(n, device=DEVICE)
         zeros = torch.zeros(n, device=DEVICE)
@@ -198,17 +196,15 @@ class PolicyGradientAgent(Agent):
         rew_max = -float("inf")
         rew_min = float("inf")
         tot = n // 2
+        rst = torch.zeros(n, device=DEVICE, dtype=torch.bool)
 
         def update_step(step, obs, act, r):
-            nonlocal losses, probs, gammas, rew_tot, tot, rew_max, rew_min
+            nonlocal losses, probs, gammas, rew_tot, tot, rew_max, rew_min, rst
             next_obs, rew, done, fail, info = r
             rew_tot += rew.sum()
             rew_max = max(rew_max, rew.max())
             rew_min = min(rew_min, rew.min())
             rew = to_tensor(rew)
-            done = torch.from_numpy(done).to(DEVICE)
-            fail = torch.from_numpy(fail).to(DEVICE)
-            rst = done | fail
 
             output = self.policy_net(obs)
             log_prob = self.policy_sampler.get_dist(output).log_prob(act)
@@ -216,6 +212,11 @@ class PolicyGradientAgent(Agent):
                 log_prob = log_prob.sum(-1)
             probs = log_prob + torch.where(rst, zeros, probs * self.gamma)
             losses -= probs * rew
+
+            done = torch.from_numpy(done).to(DEVICE)
+            fail = torch.from_numpy(fail).to(DEVICE)
+
+            rst = done | fail
             tot += rst.sum().item()
 
         run_env_vec(env, self, max_steps=max_steps, step_trigger=update_step)
@@ -239,6 +240,120 @@ class PolicyGradientAgent(Agent):
         self.policy_net.train()
         self.policy_sampler.train()
         for epoch in tqdm(range(self.epochs)):
-            self.update_vec(env, logger, self.max_steps)
+            self.update(env, logger, self.max_steps)
+            epo_trigger(epoch)
+            logger.commit()
+
+
+class ActorCriticAgent(Agent):
+    def __init__(
+        self, lr: float, gamma: float, epochs: int, max_steps: int, arch: dict
+    ):
+        policy_net = model.gen_net(arch["policy"])
+        policy_sampler = model.gen_sampler(arch["sampler"])
+        super().__init__(policy_net, policy_sampler)
+        self.optimizer_policy = torch.optim.Adam(
+            itertools.chain(policy_net.parameters(), policy_sampler.parameters()), lr=lr
+        )
+
+        self.value_net = model.gen_net(arch["value"])
+        self.optimizer_value = torch.optim.Adam(
+            self.value_net.parameters(), lr=lr
+        )
+        
+        self.gamma = torch.tensor(gamma, device=DEVICE)
+        self.epochs = epochs
+        self.max_steps = max_steps
+        
+    def save(self, path: str):
+        torch.save(
+            (self.policy_net.state_dict(), self.policy_sampler.state_dict(), self.value_net.state_dict()), path
+        )
+
+    def load(self, path: str):
+        net_state_dict, sampler_state_dict, value_state_dict = torch.load(
+            path, map_location=DEVICE, weights_only=True
+        )
+        self.policy_net.load_state_dict(net_state_dict)
+        self.policy_sampler.load_state_dict(sampler_state_dict)
+        self.value_net.load_state_dict(value_state_dict)
+
+    def update(self, env: gym.vector.VectorEnv, logger: Logger, max_steps: int):
+        n = env.num_envs
+        rew_tot = 0
+        rew_max = -float("inf")
+        rew_min = float("inf")
+        tot = n // 2
+        keep = torch.ones(n, device=DEVICE, dtype=torch.bool)
+
+        score_tot = 0.0
+        value_loss_tot = 0.0
+
+        def update_step(step, obs, act, r):
+            nonlocal rew_tot, tot, rew_max, rew_min, keep, score_tot, value_loss_tot
+            next_obs, rew, done, fail, info = r
+            
+            rew = to_tensor(rew)[keep]
+            rew_tot += rew.sum().item()
+            rew_max = max(rew_max, rew.max().item())
+            rew_min = min(rew_min, rew.min().item())
+            obs = obs[keep]
+            act = act[keep]
+            next_obs = to_tensor(next_obs)[keep]
+
+            output = self.policy_net(obs)
+            log_prob = self.policy_sampler.get_dist(output).log_prob(act)
+            while len(log_prob.shape) >= 2:
+                log_prob = log_prob.sum(-1)
+
+            rew.unsqueeze_(1)
+            log_prob.unsqueeze_(1)
+
+            #Update Value Net
+            
+            value_x = self.value_net(obs)
+            value_y = rew + self.gamma * self.value_net(next_obs)
+            value_loss = torch.nn.functional.mse_loss(value_x, value_y)
+            self.optimizer_value.zero_grad()
+            value_loss.backward()
+            self.optimizer_value.step()
+            value_loss_tot += value_loss.item()
+
+            #Update Policy Net
+            advantage = rew + self.gamma * self.value_net(next_obs) - self.value_net(obs)
+            score = -log_prob * advantage
+            score = score.sum()
+            self.optimizer_policy.zero_grad()
+            score.backward()
+            self.optimizer_policy.step()
+            score_tot += score.item()
+
+
+            done = torch.from_numpy(done).to(DEVICE)
+            fail = torch.from_numpy(fail).to(DEVICE)
+            keep = ~(done | fail)
+                
+            tot += (~keep).sum().item()
+
+        run_env_vec(env, self, max_steps=max_steps, step_trigger=update_step)
+        logger.log_scalar("eps_len", n * max_steps / tot)
+        logger.log_scalar("reward_mean", rew_tot / (n * max_steps))
+        logger.log_scalar("reward_max", rew_max)
+        logger.log_scalar("reward_min", rew_min)
+        logger.log_scalar("score_tot", score_tot)
+        logger.log_scalar("value_loss_tot", value_loss_tot)
+
+    def training_loop(
+        self,
+        env: gym.vector.VectorEnv,
+        logger: Logger,
+        epo_trigger: Callable,
+        **kwargs,
+    ):
+        self.policy_net.train()
+        self.policy_sampler.train()
+        self.value_net.train()
+        for epoch in tqdm(range(self.epochs)):
+            self.update(env, logger, self.max_steps)
             epo_trigger(epoch)
             logger.commit()
